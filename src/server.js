@@ -1,15 +1,26 @@
 const express = require('express');
 const dotenv = require('dotenv');
 const winston = require('winston');
-const fs = require('fs');
-const path = require('path');
+const swaggerUi = require('swagger-ui-express');
+const swaggerJsDoc = require('swagger-jsdoc');
 const routes = require('./routes');
+const errorHandler = require('./middleware/errorHandler');
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
 
 dotenv.config();
 
 const app = express();
+app.use(helmet());
 app.use(express.json());
-app.use(express.static(path.join(__dirname, '../public')));
+app.use(express.static('public'));
+
+// Rate limiting
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100 // limit each IP to 100 requests per windowMs
+});
+app.use(limiter);
 
 // Setup logging
 const logger = winston.createLogger({
@@ -23,26 +34,30 @@ const logger = winston.createLogger({
   ],
 });
 
+// Swagger documentation setup
+const swaggerOptions = {
+  swaggerDefinition: {
+    openapi: '3.0.0',
+    info: {
+      title: 'Mautic-ERPNext-Odoo Integration API',
+      version: '1.0.0',
+      description: 'API documentation for the integration project',
+    },
+    servers: [
+      {
+        url: 'http://localhost:3000/api',
+      },
+    ],
+  },
+  apis: ['./src/routes.js'], // Path to the API docs
+};
+
+const swaggerDocs = swaggerJsDoc(swaggerOptions);
+app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocs));
+
+// Use routes
 app.use('/api', routes);
-
-// New endpoint to update .env file
-app.post('/api/update-config', (req, res) => {
-  const { config } = req.body;
-  let envContent = '';
-
-  for (const [key, value] of Object.entries(config)) {
-    envContent += `${key}=${value}\n`;
-  }
-
-  fs.writeFile('.env', envContent, (err) => {
-    if (err) {
-      logger.error('Error updating .env file:', err);
-      return res.status(500).json({ error: 'Failed to update configuration' });
-    }
-    logger.info('Configuration updated successfully');
-    res.json({ message: 'Configuration updated successfully' });
-  });
-});
+app.use(errorHandler);
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {

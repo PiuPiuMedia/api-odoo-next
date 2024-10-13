@@ -1,97 +1,139 @@
 const { mauticApi, erpnextApi, odooApi, logger } = require('./services');
 const { authenticateOdoo } = require('./utils');
+const bcrypt = require('bcrypt');
+const User = require('./models/User'); // Assuming you have a User model
 
-exports.syncContact = async (req, res) => {
+// Create a new contact
+exports.createContact = async (req, res, next) => {
   try {
-    const { contactId } = req.body;
-
-    // Fetch contact from Mautic
-    const mauticResponse = await mauticApi.get(`/api/contacts/${contactId}`);
-    const mauticContact = mauticResponse.data.contact;
-
-    // Sync to ERPNext
-    const erpnextCustomer = {
-      doctype: 'Customer',
-      customer_name: `${mauticContact.fields.all.firstname} ${mauticContact.fields.all.lastname}`,
-      email_id: mauticContact.fields.all.email,
-      mobile_no: mauticContact.fields.all.mobile
-    };
-    await erpnextApi.post('/api/resource/Customer', erpnextCustomer);
-
-    // Sync to Odoo
-    const odooSessionId = await authenticateOdoo();
-    const odooPartner = {
-      name: `${mauticContact.fields.all.firstname} ${mauticContact.fields.all.lastname}`,
-      email: mauticContact.fields.all.email,
-      phone: mauticContact.fields.all.mobile
-    };
-    await odooApi.post('/web/dataset/call_kw', {
-      model: 'res.partner',
-      method: 'create',
-      args: [odooPartner],
-      kwargs: {},
-      session_id: odooSessionId
-    });
-
-    logger.info(`Contact ${contactId} synced successfully`);
-    res.json({ message: 'Contact synced successfully' });
+    const { firstName, lastName, email, mobile } = req.body;
+    const contactData = { firstname: firstName, lastname: lastName, email, mobile };
+    const { data } = await mauticApi.post('/api/contacts/new', contactData);
+    logger.info(`Created contact: ${data.contact.id}`);
+    res.status(201).json(data);
   } catch (error) {
-    logger.error('Error syncing contact:', error);
-    res.status(500).json({ error: 'An error occurred while syncing the contact' });
+    next(error);
   }
 };
 
-exports.syncCustomer = async (req, res) => {
+// Bulk create contacts
+exports.bulkCreateContacts = async (req, res, next) => {
   try {
-    const { customerId } = req.body;
-
-    // Fetch customer from ERPNext
-    const erpnextResponse = await erpnextApi.get(`/api/resource/Customer/${customerId}`);
-    const erpnextCustomer = erpnextResponse.data.data;
-
-    // Sync to Mautic
-    const mauticContact = {
-      firstname: erpnextCustomer.customer_name.split(' ')[0],
-      lastname: erpnextCustomer.customer_name.split(' ').slice(1).join(' '),
-      email: erpnextCustomer.email_id,
-      mobile: erpnextCustomer.mobile_no
-    };
-    await mauticApi.post('/api/contacts/new', mauticContact);
-
-    // Sync to Odoo
-    const odooSessionId = await authenticateOdoo();
-    const odooPartner = {
-      name: erpnextCustomer.customer_name,
-      email: erpnextCustomer.email_id,
-      phone: erpnextCustomer.mobile_no
-    };
-    await odooApi.post('/web/dataset/call_kw', {
-      model: 'res.partner',
-      method: 'create',
-      args: [odooPartner],
-      kwargs: {},
-      session_id: odooSessionId
-    });
-
-    logger.info(`Customer ${customerId} synced successfully`);
-    res.json({ message: 'Customer synced successfully' });
-  } catch (error) {
-    logger.error('Error syncing customer:', error);
-    res.status(500).json({ error: 'An error occurred while syncing the customer' });
-  }
-};
-
-exports.webhookMautic = async (req, res) => {
-  try {
-    const { leads } = req.body;
-    for (const lead of leads) {
-      // Sync updated lead to ERPNext and Odoo
-      // ... (implement the sync logic here)
+    const contacts = req.body.contacts; // Expecting an array of contact objects
+    const results = [];
+    for (const contact of contacts) {
+      const { data } = await mauticApi.post('/api/contacts/new', contact);
+      results.push(data);
     }
-    logger.info('Processed Mautic webhook');
+    res.status(201).json(results);
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Get all contacts
+exports.getContacts = async (req, res, next) => {
+  try {
+    const { data } = await mauticApi.get('/api/contacts');
+    res.json(data);
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Search contacts
+exports.searchContacts = async (req, res, next) => {
+  try {
+    const { query } = req.query; // Get search query from query parameters
+    const { data } = await mauticApi.get(`/api/contacts?search=${query}`);
+    res.json(data);
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Update a contact
+exports.updateContact = async (req, res, next) => {
+  try {
+    const { contactId, updates } = req.body;
+    const { data } = await mauticApi.put(`/api/contacts/${contactId}`, updates);
+    res.json(data);
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Delete a contact
+exports.deleteContact = async (req, res, next) => {
+  try {
+    const { contactId } = req.params;
+    await mauticApi.delete(`/api/contacts/${contactId}`);
+    res.sendStatus(204);
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Handle Mautic webhook
+exports.handleMauticWebhook = async (req, res, next) => {
+  try {
+    const { event, data } = req.body; // Assuming Mautic sends event and data
+    logger.info(`Received Mautic webhook: ${event}`);
+    // Process the webhook event (e.g., update contact)
     res.sendStatus(200);
   } catch (error) {
-    logger.error('Error processing Mautic webhook:', error);
-    res.status(500).json({ error: 'An error occurred while processing the webhook' });
+    next(error);
+  }
+};
+
+// User registration
+exports.registerUser = async (req, res, next) => {
+  try {
+    const { username, password } = req.body;
+    const hashedPassword = await bcrypt.hash(password, 10);
+    const user = await User.create({ username, password: hashedPassword });
+    res.status(201).json({ id: user.id, username: user.username });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// User login
+exports.loginUser = async (req, res, next) => {
+  try {
+    const { username, password } = req.body;
+    const user = await User.findOne({ where: { username } });
+    if (!user || !(await bcrypt.compare(password, user.password))) {
+      return res.status(401).json({ message: 'Invalid credentials' });
+    }
+    const token = generateToken(user);
+    res.json({ token });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// File upload for contacts
+exports.uploadContacts = async (req, res, next) => {
+  try {
+    const file = req.file; // Assuming you use multer for file uploads
+    // Process the uploaded file (e.g., parse CSV and create contacts)
+    // Implement your CSV parsing logic here
+    res.status(200).json({ message: 'File uploaded successfully' });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Export contacts
+exports.exportContacts = async (req, res, next) => {
+  try {
+    const { data } = await mauticApi.get('/api/contacts');
+    const csv = json2csv(data);
+    res.header('Content-Type', 'text/csv');
+    res.attachment('contacts.csv');
+    res.send(csv);
+  } catch (error) {
+    next(error);
   }
 };
