@@ -2,6 +2,7 @@ const { mauticApi, erpnextApi, odooApi, logger } = require('./services');
 const { authenticateOdoo } = require('./utils');
 const bcrypt = require('bcrypt');
 const User = require('./models/User'); // Assuming you have a User model
+const json2csv = require('json2csv').parse;
 
 // Create a new contact
 exports.createContact = async (req, res, next) => {

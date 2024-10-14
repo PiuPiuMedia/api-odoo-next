@@ -15,13 +15,19 @@ const {
 const { basicAuth } = require('./middleware');
 const multer = require('multer');
 const upload = multer({ dest: 'uploads/' });
+const { body } = require('express-validator');
 
 const router = express.Router();
 
 router.use(basicAuth);
 
 // Contact routes
-router.post('/contacts', createContact);
+router.post('/contacts', 
+  body('email').isEmail().withMessage('Must be a valid email'),
+  body('firstName').notEmpty().withMessage('First name is required'),
+  body('lastName').notEmpty().withMessage('Last name is required'),
+  createContact
+);
 router.post('/contacts/bulk', bulkCreateContacts);
 router.get('/contacts', getContacts);
 router.get('/contacts/search', searchContacts);
